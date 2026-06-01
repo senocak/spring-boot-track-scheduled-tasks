@@ -11,7 +11,7 @@ GET {{baseUrl}}/com.example.demo.ScheduledJob
 GET {{baseUrl}}/com.example.demo.ScheduledJob/every5second
 
 ### triggerJob
-POST {{baseUrl}}/com.example.demo.ScheduledJob/every5second
+POST {{baseUrl}}/com.example.demo.ScheduledJob/every5second/run
 
 ### stop
 POST {{baseUrl}}/com.example.demo.ScheduledJob/every5second/stop

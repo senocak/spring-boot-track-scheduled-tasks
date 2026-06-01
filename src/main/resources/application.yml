@@ -1,5 +1,17 @@
-# tracking.scheduledJobs.path: /scheduled-jobs
+server:
+  port: 8080
+
 spring:
   threads:
     virtual:
       enabled: true
+
+tracking:
+  scheduledJobs:
+    path: /scheduled-jobs
+
+logging:
+  level:
+    net:
+      javacrumbs:
+        shedlock: debug

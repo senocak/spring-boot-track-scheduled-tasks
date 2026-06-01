@@ -31,8 +31,8 @@ class ScheduledJobController(
         scheduledJobTracker.findRunByUuid(className = className, methodName = methodName, uuid = uuid)
             ?: throw RuntimeException("Scheduled job run not found for class $className, method $methodName and uuid $uuid")
 
-    @PostMapping(value = ["{className}/{methodName}"])
-    fun triggerJob(@PathVariable className: String, @PathVariable methodName: String): String =
+    @PostMapping(value = ["{className}/{methodName}/run"])
+    fun triggerJob(@PathVariable className: String, @PathVariable methodName: String): TrackedScheduledJob =
         scheduledJobTracker.triggerJob(className = className, methodName = methodName)
 
     @PostMapping(value = ["/{className}/{methodName}/stop"])

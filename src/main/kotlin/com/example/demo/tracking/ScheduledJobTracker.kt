@@ -28,7 +28,6 @@ class ScheduledJobTracker(
     @Qualifier(value = "virtualThreadTaskScheduler") private val taskScheduler: TaskScheduler
 ) {
     var trackedJobs: MutableSet<TrackedScheduledJob> = HashSet()
-
     @EventListener(value = [ApplicationReadyEvent::class])
     fun init() {
         scheduledTaskHolder.scheduledTasks.forEach { it: ScheduledTask ->
@@ -39,6 +38,7 @@ class ScheduledJobTracker(
             val annotation: Scheduled = runnable!!.method.getAnnotation(Scheduled::class.java)
             trackedJobs.add(element =
                 TrackedScheduledJob(
+                    status = JobStatus.RUNNING,
                     className = runnable.method.declaringClass.name,
                     methodName = runnable.method.name,
                     settings = Settings(
@@ -64,6 +64,7 @@ class ScheduledJobTracker(
             .firstOrNull { it.className == className && it.methodName == methodName }
             ?: throw IllegalArgumentException("Task not found: $className.$methodName")
         task.scheduledTask.cancel()
+        task.status = JobStatus.STOPPED
         return task
     }
 
@@ -72,17 +73,16 @@ class ScheduledJobTracker(
         val task: TrackedScheduledJob = trackedJobs
             .firstOrNull { it.className == className && it.methodName == methodName }
             ?: throw IllegalArgumentException("Task not found: $key")
-        val job: TrackedScheduledJob = findJobByClassAndMethod(className = className, methodName = methodName)
-            ?: throw IllegalArgumentException("Job not found: $key")
-        val cronExpr: String? = job.settings.cron
+        val cronExpr: String? = task.settings.cron
         val trigger: Trigger = when {
             cronExpr != null -> CronTrigger(cronExpr)
-            job.settings.fixedRate != null -> PeriodicTrigger(Duration.of(job.settings.fixedRate, job.settings.timeUnit.toChronoUnit()))
-            job.settings.fixedDelay != null -> PeriodicTrigger(Duration.of(job.settings.fixedDelay, job.settings.timeUnit.toChronoUnit()))
+            task.settings.fixedRate != null -> PeriodicTrigger(Duration.of(task.settings.fixedRate, task.settings.timeUnit.toChronoUnit()))
+            task.settings.fixedDelay != null -> PeriodicTrigger(Duration.of(task.settings.fixedDelay, task.settings.timeUnit.toChronoUnit()))
             else -> throw IllegalArgumentException("No cron, fixedRate or fixedDelay defined for job: $key")
         }
         task.future?.cancel(false)
         task.future = taskScheduler.schedule(task.runnable, trigger)
+        task.status = JobStatus.RUNNING
         return task
     }
 
@@ -99,12 +99,13 @@ class ScheduledJobTracker(
             val nextRun: String = CronExpression.parse(it).next(LocalDateTime.now()).toString()
             task.updateNextRun(cron = it, nextRun = nextRun)
         }
+        task.status = JobStatus.RUNNING
         return task
     }
 
-    fun triggerJob(className: String, methodName: String): String {
-        val job: TrackedScheduledJob = findJobByClassAndMethod(className = className, methodName = methodName)
-            ?: return "Job is null or $className.$methodName is already running or not activated"
+    fun triggerJob(className: String, methodName: String): TrackedScheduledJob {
+        val task: TrackedScheduledJob = findJobByClassAndMethod(className = className, methodName = methodName)
+            ?: throw RuntimeException("Job is null or $className.$methodName is already running or not activated")
         val scheduledTasks: Set<ScheduledTask> = scheduledTaskHolder.scheduledTasks
         val matchingJob: ScheduledMethodRunnable? = scheduledTasks
             .mapNotNull { unwrapToScheduledMethodRunnable(runnableCandidate = it.task.runnable) }
@@ -113,17 +114,18 @@ class ScheduledJobTracker(
             throw RuntimeException("No matching job found for class: $className and method: $methodName")
         }
         matchingJob.run()
-        return "Job is triggered $job"
+        return task
     }
 
     fun jobStart(signature: MethodSignature): UUID {
         val uuid: UUID = UUID.randomUUID()
-        val scheduledJob: TrackedScheduledJob = get(signature = signature)
-        scheduledJob.settings.cron?.let { it: String ->
+        val task: TrackedScheduledJob = get(signature = signature)
+        task.settings.cron?.let { it: String ->
             val nextRun: String = CronExpression.parse(it).next(LocalDateTime.now()).toString()
-            scheduledJob.updateNextRun(cron = it, nextRun = nextRun)
+            task.updateNextRun(cron = it, nextRun = nextRun)
         }
-        scheduledJob.addRun(run = ScheduledJobRun(uuid = uuid, startedAt = Instant.now()))
+        task.addRun(run = ScheduledJobRun(uuid = uuid, startedAt = Instant.now()))
+        task.status = JobStatus.RUNNING
         return uuid
     }
 
@@ -145,9 +147,9 @@ class ScheduledJobTracker(
         trackedJobs.firstOrNull { it.className == className && it.methodName == methodName }
 
     fun findRunByUuid(className: String, methodName: String, uuid: String): ScheduledJobRun? {
-        val scheduledJob: TrackedScheduledJob = findJobByClassAndMethod(className = className, methodName = methodName)
+        val task: TrackedScheduledJob = findJobByClassAndMethod(className = className, methodName = methodName)
             ?: throw RuntimeException("No tracked job found for class: $className.$methodName")
-        return scheduledJob.runs.firstOrNull { it.uuid.toString() == uuid }
+        return task.runs.firstOrNull { it.uuid.toString() == uuid }
     }
 
     private fun nullIfEmptyString(str: String): String? = str.ifEmpty { null }

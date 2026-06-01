@@ -10,8 +10,13 @@ import java.util.UUID
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 
+enum class JobStatus {
+    RUNNING, STOPPED
+}
+
 @JsonInclude(value = JsonInclude.Include.NON_NULL)
 data class TrackedScheduledJob(
+    var status: JobStatus,
     val className: String,
     val methodName: String,
     val settings: Settings,
