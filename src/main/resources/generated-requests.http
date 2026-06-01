@@ -1,0 +1,28 @@
+@baseUrl=http://localhost:8080/scheduled-jobs
+
+
+### getScheduledJobs
+GET {{baseUrl}}
+
+### getScheduledJobsPerClass
+GET {{baseUrl}}/com.example.demo.ScheduledJob
+
+### getScheduledJob
+GET {{baseUrl}}/com.example.demo.ScheduledJob/every5second
+
+### triggerJob
+POST {{baseUrl}}/com.example.demo.ScheduledJob/every5second
+
+### stop
+POST {{baseUrl}}/com.example.demo.ScheduledJob/every5second/stop
+
+### resume
+POST {{baseUrl}}/com.example.demo.ScheduledJob/every5second/resume
+
+### updateCron
+POST {{baseUrl}}/com.example.demo.ScheduledJob/every5second/cron
+Content-Type: application/json
+
+{
+  "cron": "0/1 * * * * ?"
+}

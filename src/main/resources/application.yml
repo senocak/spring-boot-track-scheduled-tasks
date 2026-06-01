@@ -1,1 +1,5 @@
 # tracking.scheduledJobs.path: /scheduled-jobs
+spring:
+  threads:
+    virtual:
+      enabled: true
