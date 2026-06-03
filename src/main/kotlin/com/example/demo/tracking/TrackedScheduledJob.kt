@@ -2,6 +2,7 @@ package com.example.demo.tracking
 
 import com.fasterxml.jackson.annotation.JsonIgnore
 import com.fasterxml.jackson.annotation.JsonInclude
+import org.springframework.scheduling.config.CronTask
 import org.springframework.scheduling.config.ScheduledTask
 import org.springframework.scheduling.support.ScheduledMethodRunnable
 import java.time.Duration
@@ -80,6 +81,7 @@ data class TrackedScheduledJob(
 
 data class Settings(
     var cron: String?,
+    var zone: String?,
     var nextRun: String?,
     val fixedRate: Long?,
     val initialDelay: Long?,

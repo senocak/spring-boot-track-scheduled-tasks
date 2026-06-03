@@ -1,12 +1,24 @@
 package com.example.demo.tracking
 
+import java.lang.reflect.Field
+import java.time.Duration
+import java.time.Instant
+import java.time.LocalDateTime
+import java.util.UUID
+import java.util.concurrent.ScheduledFuture
 import org.aspectj.lang.reflect.MethodSignature
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.boot.context.event.ApplicationReadyEvent
+import org.springframework.context.EmbeddedValueResolverAware
 import org.springframework.context.event.EventListener
 import org.springframework.scheduling.TaskScheduler
 import org.springframework.scheduling.Trigger
 import org.springframework.scheduling.annotation.Scheduled
+import org.springframework.scheduling.config.CronTask
+import org.springframework.scheduling.config.FixedDelayTask
+import org.springframework.scheduling.config.FixedRateTask
 import org.springframework.scheduling.config.ScheduledTask
 import org.springframework.scheduling.config.ScheduledTaskHolder
 import org.springframework.scheduling.support.CronExpression
@@ -14,45 +26,47 @@ import org.springframework.scheduling.support.CronTrigger
 import org.springframework.scheduling.support.PeriodicTrigger
 import org.springframework.scheduling.support.ScheduledMethodRunnable
 import org.springframework.stereotype.Component
-import java.lang.reflect.Field
-import java.time.Duration
-import java.time.Instant
-import java.time.LocalDateTime
-import java.util.UUID
-import java.util.concurrent.ScheduledFuture
-import kotlin.collections.HashSet
+import org.springframework.util.StringValueResolver
 
 @Component
 class ScheduledJobTracker(
     private val scheduledTaskHolder: ScheduledTaskHolder,
-    @Qualifier(value = "virtualThreadTaskScheduler") private val taskScheduler: TaskScheduler
-) {
+    @Qualifier(value = "virtualThreadTaskScheduler") private val taskScheduler: TaskScheduler,
+): EmbeddedValueResolverAware {
+    private val log: Logger = LoggerFactory.getLogger(this.javaClass)
+    private lateinit var embeddedValueResolver: StringValueResolver
     var trackedJobs: MutableSet<TrackedScheduledJob> = HashSet()
+
+    override fun setEmbeddedValueResolver(resolver: StringValueResolver) {
+        this.embeddedValueResolver = resolver
+    }
+
     @EventListener(value = [ApplicationReadyEvent::class])
     fun init() {
         scheduledTaskHolder.scheduledTasks.forEach { it: ScheduledTask ->
-            val runnable: ScheduledMethodRunnable? = when (val runnableCandidate: Runnable = it.task.runnable) {
+            val runnable: ScheduledMethodRunnable = when (val runnableCandidate: Runnable = it.task.runnable) {
                 is ScheduledMethodRunnable -> runnableCandidate
                 else -> unwrapToScheduledMethodRunnable(runnableCandidate = runnableCandidate)
-            }
-            val annotation: Scheduled = runnable!!.method.getAnnotation(Scheduled::class.java)
+            } ?: return@forEach
+            val annotation: Scheduled = runnable.method.getAnnotation(Scheduled::class.java)
             trackedJobs.add(element =
                 TrackedScheduledJob(
                     status = JobStatus.RUNNING,
                     className = runnable.method.declaringClass.name,
                     methodName = runnable.method.name,
                     settings = Settings(
-                        cron = nullIfEmptyString(str = annotation.cron),
-                        nextRun = if (annotation.cron.isNotEmpty())
+                        cron = if (it.task is CronTask) embeddedValueResolver.resolveStringValue(annotation.cron)?.ifEmpty { null } else null,
+                        zone = embeddedValueResolver.resolveStringValue(annotation.zone)?.ifEmpty { null },
+                        nextRun = if (annotation.cron.isNotEmpty() && it.task is CronTask)
                             CronExpression.parse(annotation.cron).next(LocalDateTime.now()).toString()
                         else null,
-                        fixedRate = nullIfNegativeNumber(number = annotation.fixedRate),
+                        fixedRate = if (it.task is FixedRateTask) nullIfNegativeNumber(number = annotation.fixedRate) else null,
                         initialDelay = nullIfNegativeNumber(number = annotation.initialDelay),
-                        fixedDelay = nullIfNegativeNumber(number = annotation.fixedDelay),
+                        fixedDelay = if (it.task is FixedDelayTask) nullIfNegativeNumber(number = annotation.fixedDelay) else null,
                         timeUnit = annotation.timeUnit
                     ),
                     runnable = runnable,
-                    future = null,
+                    future = extractFuture(scheduledTask = it),
                     scheduledTask = it
                 )
             )
@@ -63,8 +77,10 @@ class ScheduledJobTracker(
         val task: TrackedScheduledJob = trackedJobs
             .firstOrNull { it.className == className && it.methodName == methodName }
             ?: throw IllegalArgumentException("Task not found: $className.$methodName")
-        task.scheduledTask.cancel()
+        task.scheduledTask.cancel(true)
+        task.future?.cancel(false)
         task.status = JobStatus.STOPPED
+        log.info("Stopped job $className.$methodName")
         return task
     }
 
@@ -73,16 +89,20 @@ class ScheduledJobTracker(
         val task: TrackedScheduledJob = trackedJobs
             .firstOrNull { it.className == className && it.methodName == methodName }
             ?: throw IllegalArgumentException("Task not found: $key")
-        val cronExpr: String? = task.settings.cron
+        val cronExpr: String? = task.settings.cron?.let { it: String ->
+            embeddedValueResolver.resolveStringValue(it)
+        }
         val trigger: Trigger = when {
             cronExpr != null -> CronTrigger(cronExpr)
             task.settings.fixedRate != null -> PeriodicTrigger(Duration.of(task.settings.fixedRate, task.settings.timeUnit.toChronoUnit()))
             task.settings.fixedDelay != null -> PeriodicTrigger(Duration.of(task.settings.fixedDelay, task.settings.timeUnit.toChronoUnit()))
             else -> throw IllegalArgumentException("No cron, fixedRate or fixedDelay defined for job: $key")
         }
+        task.scheduledTask.cancel(true)
         task.future?.cancel(false)
         task.future = taskScheduler.schedule(task.runnable, trigger)
         task.status = JobStatus.RUNNING
+        log.info("Resumed job $key with trigger $trigger. Next run at ${task.settings.nextRun}")
         return task
     }
 
@@ -100,6 +120,7 @@ class ScheduledJobTracker(
             task.updateNextRun(cron = it, nextRun = nextRun)
         }
         task.status = JobStatus.RUNNING
+        log.info("Updated cron expression for job $key to $cron. Next run at ${task.settings.nextRun}")
         return task
     }
 
@@ -152,7 +173,14 @@ class ScheduledJobTracker(
         return task.runs.firstOrNull { it.uuid.toString() == uuid }
     }
 
-    private fun nullIfEmptyString(str: String): String? = str.ifEmpty { null }
+    private fun extractFuture(scheduledTask: ScheduledTask): ScheduledFuture<*>? =
+        try {
+            val field: Field = scheduledTask.javaClass.getDeclaredField("future")
+            field.isAccessible = true
+            field.get(scheduledTask) as? ScheduledFuture<*>
+        } catch (_: Exception) {
+            null
+        }
 
     private fun nullIfNegativeNumber(number: Long): Long? = if (number < 0) null else number
 
@@ -172,7 +200,7 @@ class ScheduledJobTracker(
                 if (unwrapped is ScheduledMethodRunnable)
                     break
             } catch (ignored: Exception) {
-                println(ignored)
+                log.warn("Could not find field $fieldName on class ${unwrapped::class.java.name} while unwrapping to find ScheduledMethodRunnable", ignored)
             }
         }
         return unwrapped as? ScheduledMethodRunnable
