@@ -109,16 +109,15 @@ class ScheduledJobTracker(
     fun updateCron(className: String, methodName: String, cron: String): TrackedScheduledJob {
         val key = "$className.$methodName"
         val task: TrackedScheduledJob = trackedJobs
-            .firstOrNull { it.className == className && it.methodName == methodName }
-            ?: throw IllegalArgumentException("Task not found: $key")
+            .firstOrNull {
+                it.className == className && it.methodName == methodName && it.settings.cron != null
+            }
+            ?: throw IllegalArgumentException("Task with cron not found: $key")
         stop(className = className, methodName = methodName)
-        val future: ScheduledFuture<*> = taskScheduler.schedule(task.runnable, CronTrigger(cron))
+        task.future = taskScheduler.schedule(task.runnable, CronTrigger(cron))
             ?: throw IllegalStateException("Could not schedule task: $key")
-        task.future = future
-        task.settings.cron?.let { it: String ->
-            val nextRun: String = CronExpression.parse(it).next(LocalDateTime.now()).toString()
-            task.updateNextRun(cron = it, nextRun = nextRun)
-        }
+        val nextRun: String = CronExpression.parse(cron).next(LocalDateTime.now()).toString()
+        task.updateNextRun(cron = cron, nextRun = nextRun)
         task.status = JobStatus.RUNNING
         log.info("Updated cron expression for job $key to $cron. Next run at ${task.settings.nextRun}")
         return task
