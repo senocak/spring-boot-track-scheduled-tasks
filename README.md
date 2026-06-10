@@ -32,8 +32,6 @@ The ConcurrentHashMap only lives in the application's memory. If your app crashe
 - Database/Cache: Store the jobId, beanName, methodName, cronExpression, and status (RUNNING, STOPPED) in a relational database or a fast key-value store.
 - On Application Startup: Implement an ApplicationRunner or @PostConstruct method that queries the database for all jobs with a RUNNING status and loops through them, passing them into the startJob() method to rebuild the in-memory map.
 
-Would you like to see an example of how to securely map these job configurations to a persistence layer so your scheduled tasks survive application restarts?
-
 ## Sample scheduled job
 
 The demo has a very simple scheduled job, that prints *foo* every 5 seconds.
